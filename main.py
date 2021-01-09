@@ -120,10 +120,10 @@ def servicechiangenerate(vexnum, VNFnum):
     return chain
 
 
-#因为只是测试算法的可行性，这里随机生成5-10个服务链，用于表示某个时间片内收到的用户请求。
+#因为只是测试算法的可行性，这里随机生成10-30个服务链，用于表示某个时间片内收到的用户请求。
 def servicechainsgenerate(vexnum, VNFnum):
     chains = list()
-    picknum = random.randint(5, 10)
+    picknum = random.randint(10, 30)
     for i in range(picknum):
         chain = servicechiangenerate(vexnum,VNFnum)
         chains.append(chain)
@@ -199,6 +199,11 @@ def queuingdelaygenerate(servicechains, APtarget):
     return delay
 
 def selection_path(startpoint,destination,latency,latencylimitaion,stack,P,vexnum,M,E):
+
+    #限制path数量
+    if len(P) > 1000:
+        return
+
     stack.append(startpoint)
     if startpoint == destination :
         new = stack[:]
@@ -348,6 +353,9 @@ def servicechainisdone(servicechain,path,deployment,vexs,edgelist,VNFs):
         if istherereeuse(vexs[server], VNF) == False:
             vexs[server]['resource capacity'] -= VNFs[VNF]['capacity need']
             vexs[server]['VNF instance'].append(VNFs[VNF])
+        for instance in vexs[server]['VNF instance']:
+            if instance['type'] == VNF:
+                instance['processing capacity'] -= servicechain['flowrate']
     #更新edgelist
     for i in range(len(path) - 1):
         for edge in edgelist:
@@ -498,7 +506,7 @@ def advanced_GA(servicechain,path,vexs,VNFs):
     reusenum = 0
     length, lists, LCS = advanced_Pathpriority(path, vexs, servicechain['VNFs'], servicechain['flowrate'])
     typeR = set(LCS)
-    print(servicechain['VNFs'],lists,path)
+    #print(servicechain['VNFs'],lists,path)
     #deal the reusable
     for VNFnum in range(len(servicechain['VNFs'])):
         VNFtype = servicechain['VNFs'][VNFnum]
@@ -550,22 +558,50 @@ def advanced_GA(servicechain,path,vexs,VNFs):
     pathslice.append(path[start:])
     pathstart.append(start)
 
-    print(VNFchainslice, pathslice, pathstart)
+    deploymentslices = list()
+    #print(VNFchainslice, pathslice, pathstart)
     for i in range(len(VNFchainslice)):
         if VNFchainslice[i] != []:
             deploymentslice = dealtypeN(0,0,pathslice[i],VNFchainslice[i],vexs,VNFs)
-            print(deploymentslice)
+            deploymentslices.append(deploymentslice)
+            #print(deploymentslice)
             index = 0
-            while deployment[index] != -1:
-                index = index + 1
             for item in deploymentslice:
-                deployment[index] = item + pathstart[i]
+                while deployment[index] != -1:
+                    index = index + 1
+                if item != -1:
+                    deployment[index] = item + pathstart[i]
+                else:
+                    deployment[index] = item
                 index = index + 1
-            for VNFtype in VNFchainslice[i]:
+            for t in range(len(VNFchainslice[i])):
+                VNFtype = VNFchainslice[i][t]
                 consumption += VNFs[VNFtype]['capacity need']
+                vexid = pathslice[i][deploymentslice[t]]
+                vexs[vexid]['resource capacity'] -= VNFs[VNFtype]['capacity need']
+        else:
+            deploymentslices.append([])
     if -1 in deployment:
         consumption = sys.maxsize
-    print("deployment",deployment, consumption)
+    #print("deployment",deployment, consumption)
+
+    for VNFnum in range(len(servicechain['VNFs'])):
+        VNFtype = servicechain['VNFs'][VNFnum]
+        if VNFtype in typeR:  # reusable
+            for server in range(len(path)):
+                if VNFtype in lists[server]:
+                    for instance in vexs[path[server]]['VNF instance']:
+                        if instance['type'] == VNFtype:
+                            instance['processing capacity'] += servicechain['flowrate']
+                            break
+                    break
+    for i in range(len(VNFchainslice)):
+        if VNFchainslice[i] != []:
+            for t in range(len(VNFchainslice[i])):
+                VNFtype = VNFchainslice[i][t]
+                vexid = pathslice[i][deploymentslices[i][t]]
+                vexs[vexid]['resource capacity'] += VNFs[VNFtype]['capacity need']
+
     return deployment, consumption, reusenum
 
 
@@ -607,42 +643,8 @@ def advanced_handleservicechains(servicechains, edgelist, matrix, vexs, VNFs):
 
     return solutions
 
-def advanced_handleservicechains_sub(servicechains, edgelist, matrix, vexs, VNFs):
-    key = ['path','deployment','consumption','reuse time']
-    solutions = list()
-    for servicechain in servicechains:
-        P = CDFSA(edgelist,matrix,servicechain,servicechains)
-        deploymentmin = [-1 for i in range(len(servicechain['VNFs']))]
-        Csmin = sys.maxsize
-        Prmin = 0
-        pathmin = list()
-        priormax = 0
-        for path in P:
-            prior, _, _ = advanced_Pathpriority(path, vexs, servicechain['VNFs'], servicechain['flowrate'])
-            if priormax > prior and Csmin != sys.maxsize:
-                continue
-            priormax = prior
-            deployment, Cs, Pr = PGA(servicechain, path, vexs, VNFs)
-            if Csmin > Cs:
-                deploymentmin = deployment
-                Csmin = Cs
-                Prmin = Pr
-                pathmin = path
-
-
-        solution = dict([(k, []) for k in key])
-        solution['path'] = pathmin
-        solution['deployment'] = deploymentmin
-        solution['consumption'] = Csmin
-        solution['reuse time'] = Prmin
-        if Csmin != sys.maxsize :
-            servicechainisdone(servicechain, pathmin, deploymentmin, vexs, edgelist, VNFs)
-        solutions.append(solution)
-
-    return solutions
-
 if __name__ == '__main__':
-    vexs, edgelist, servicechains, matrix, VNFs = init("layer42.txt")
+    vexs, edgelist, servicechains, matrix, VNFs = init("bellsouth.txt")
     vexs_sub = copy.deepcopy(vexs)
     edgelist_sub = copy.deepcopy(edgelist)
     servicechains_sub = copy.deepcopy(servicechains)
@@ -655,45 +657,40 @@ if __name__ == '__main__':
     print(matrix)
     print(VNFs)
 
-    testchains = list()
-    testchains.append(servicechains[0])
+    testchain = list()
+    testchain.append(servicechains[0])
+
     time_start = time.time()
-    solutions = advanced_handleservicechains(testchains, edgelist, matrix, vexs, VNFs)
+    solutions = advanced_handleservicechains(servicechains, edgelist, matrix, vexs, VNFs)
     time_end = time.time()
-    consumptionsum1 = sys.maxsize
+    consumptionsum1 = 0
     for i in range(len(solutions)):
-        if solutions[i]['consumption'] != sys.maxsize:
+        if -1 not in solutions[i]['deployment']:
             consumptionsum1 += solutions[i]['consumption']
-    print(testchains)
+    print(servicechains)
     print(solutions)
     print(consumptionsum1)
     print(time_end - time_start)
     for vex in vexs:
         if vex['resource capacity'] < 0:
             print("error")
-    for edge in edgelist :
-        if edge['bandwidth'] < 0 :
-            print("error")
 
-    testchains_sub = list()
-    testchains_sub.append(servicechains[0])
+
+    testchain_sub = list()
+    testchain_sub.append(servicechains[0])
     time_start = time.time()
-    solutions_sub = advanced_handleservicechains_sub(testchains_sub, edgelist_sub, matrix_sub, vexs_sub, VNFs_sub)
+    solutions_sub = handleservicechains(servicechains_sub, edgelist_sub, matrix_sub, vexs_sub, VNFs_sub)
     time_end = time.time()
-    consumptionsum1_sub = sys.maxsize
+    consumptionsum1_sub = 0
     for i in range(len(solutions_sub)):
-        if solutions_sub[i]['consumption'] != sys.maxsize:
-            consumptionsum1 += solutions_sub[i]['consumption']
-    print(testchains_sub)
+        if -1 not in solutions_sub[i]['deployment']:
+            consumptionsum1_sub += solutions_sub[i]['consumption']
+    print(servicechains_sub)
     print(solutions_sub)
     print(consumptionsum1_sub)
     print(time_end - time_start)
-    for vex in vexs_sub:
-        if vex['resource capacity'] < 0:
-            print("error")
-    for edge in edgelist_sub:
-        if edge['bandwidth'] < 0:
-            print("error")
+
+
 
 '''
     time_start = time.time()
